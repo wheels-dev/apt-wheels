@@ -1,0 +1,24 @@
+Architectures: amd64
+Codename: bleeding-edge
+Components: main
+Date: Tue, 26 May 2026 17:51:53 +0000
+Description: Wheels CFML framework apt repository
+Label: Wheels
+Origin: wheels.dev
+Suite: bleeding-edge
+MD5Sum:
+ 679498372356bf6cc926bf0391b62775              204 Release
+ d41d8cd98f00b204e9800998ecf8427e                0 main/binary-amd64/Packages
+ 40ff58536700c5dfbb0536c67c8e27de               29 main/binary-amd64/Packages.gz
+SHA1:
+ 220f4ef1e68af0d121c6c1fe6e2759f17c664a02              204 Release
+ da39a3ee5e6b4b0d3255bfef95601890afd80709                0 main/binary-amd64/Packages
+ 1c497339e46df91d67928ad392afde24f01245d7               29 main/binary-amd64/Packages.gz
+SHA256:
+ 263d41f6ce3c6a0b77283811e7e58efe4e62fa729c6b7d181ca13dc92bdf4f67              204 Release
+ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855                0 main/binary-amd64/Packages
+ 333fe915924570bce19325a538133d308a6d6ee24e3e0b86f3418108e5a0e17f               29 main/binary-amd64/Packages.gz
+SHA512:
+ ca0119d6830a0ef23a19df9c8e157525e45d1e6fa7bebc608d70ea1edb8270d88f2b2e03e281af7533ae26ff5f84a0b4092906eb1415e228935b0fe6a9d2877c              204 Release
+ cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e                0 main/binary-amd64/Packages
+ 7f9e2b0ac25ba6499fb90bb507f5fd673ef39adc52c0060d65eb3043fd4fc70ff93018be4c78c2eeabba9b754f312b58f6df3e7ad2ce2105f42c803c62c317e4               29 main/binary-amd64/Packages.gz
