@@ -3,8 +3,10 @@
 Source repository backing **<https://apt.wheels.dev>**, the native Debian/Ubuntu
 package repository for the [Wheels](https://wheels.dev) CFML framework CLI.
 
-This repo holds the static apt metadata tree plus the pooled `.deb` artifacts,
-and is auto-deployed to Cloudflare Pages on every push to `main`. End users do:
+This repo holds the **workflow + scripts + landing page + signing key**. The apt metadata
+tree (`dists/`) and the `.deb` pool (`pool/`) live in Cloudflare R2 (bucket `wheels-apt`),
+served at https://apt.wheels.dev via R2 custom-domain. The receiver workflow regenerates
+the metadata + uploads to R2 on every release. End users do:
 
 ```bash
 # Stable channel
@@ -28,8 +30,8 @@ event type `wheels-released` and a `{version, channel}` payload. The receiver
 at [`.github/workflows/wheels-released.yml`](.github/workflows/wheels-released.yml)
 downloads the new `.deb` from the upstream GitHub Release, slots it into
 `pool/<channel>/w/<pkg>/`, regenerates `Packages.gz` / `Release` / `InRelease`
-via `apt-ftparchive`, signs with GPG, and commits the whole tree back.
-Cloudflare Pages picks up the push and republishes within ~30s.
+via `apt-ftparchive`, signs with GPG, then uploads the new `.deb` + regenerated `dists/` tree to R2.
+R2's custom-domain edge serves the new files within seconds.
 
 The receiver also supports `workflow_dispatch` for backfill / disaster-recovery
 (re-add a missing version without waiting for a new release):
@@ -49,8 +51,7 @@ gh workflow run wheels-released.yml \
 | `templates/aptftparchive.conf` | `apt-ftparchive` config (Origin, Label, Components, Architectures, compression). The wrapper script overrides Codename + Suite per-distribution at invocation time. |
 | `index.html` | Plain-HTML landing page served at the apex. Shows the sources.list snippet so browsers hitting `apt.wheels.dev` see install instructions. |
 | `wheels.gpg.placeholder` | Reminder file — **must be replaced with the real ASCII-armored public key** committed as `wheels.gpg` at the repo root before the first release publish. See "Operational setup" below. |
-| `pool/` | Populated at first publish: `pool/<channel>/w/<pkg>/<pkg>_<v>_amd64.deb`. |
-| `dists/` | Populated at first publish: `dists/<channel>/Release` + signatures + `main/binary-amd64/Packages.gz`. |
+
 
 ## Distribution layout (post-first-publish)
 
@@ -111,14 +112,15 @@ Before this repo will publish a usable repository:
    committed `wheels.gpg` at the repo root. The same key is used by the
    parallel [`yum-wheels`](https://github.com/wheels-dev/yum-wheels) bucket.
 
-2. **Cloudflare Pages** — create a Pages project pointing at this repo, bind
-   the apex domain `apt.wheels.dev`. Build command is empty (the repo *is* the
-   static site); output dir is `./`.
+2. **Cloudflare R2 bucket** — create the `wheels-apt` bucket, attach the
+   `apt.wheels.dev` custom domain. R2 has no per-object size limit (vs.
+   Cloudflare Pages' 25 MiB) which is why we serve from R2 rather than Pages.
 
 3. **CI secrets** at
    <https://github.com/wheels-dev/apt-wheels/settings/secrets/actions>:
    - `WHEELS_REPO_GPG_PRIVATE_KEY` — ASCII-armored private key
    - `WHEELS_REPO_GPG_PASSPHRASE` — passphrase
+   - `CLOUDFLARE_API_TOKEN` — token with `Workers R2 Storage:Edit` on this account
 
 4. **Upstream dispatch token** — on `wheels-dev/wheels`, add
    `LINUX_REPO_DISPATCH_TOKEN` (fine-grained PAT with `actions: write` on this
