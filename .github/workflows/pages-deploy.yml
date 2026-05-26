@@ -1,0 +1,49 @@
+# Deploys the bucket-repo tree to the `wheels-apt` Cloudflare Pages project on
+# every push to main. Pairs with `wheels-released.yml` (the receiver workflow):
+#
+#   1. `wheels-released.yml` regenerates apt metadata, commits, and pushes main.
+#   2. This workflow fires on that push, runs `wrangler pages deploy`, which
+#      uploads the current tree to https://apt.wheels.dev (and to the bare
+#      *.pages.dev preview).
+#
+# Why separate from the receiver: the receiver concerns itself with metadata
+# correctness (apt-ftparchive + GPG); this one concerns itself with shipping
+# bytes to the CDN. Splitting keeps each workflow easy to re-run independently
+# on failure.
+#
+# Manual dispatch is available via `workflow_dispatch` to redeploy without a
+# new push.
+
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-deploy-apt
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy ${{ github.sha }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Deploy to Cloudflare Pages (wheels-apt)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: "511d04f367103ec276d875ab41a24dea"
+          # `./` includes README.md, LICENSE, scripts/, templates/, .github/ — CF
+          # Pages skips the .github/ dir automatically. The other files are
+          # non-sensitive and adding them keeps the deploy command trivial.
+          command: pages deploy ./ --project-name=wheels-apt --branch=main --commit-dirty=true
