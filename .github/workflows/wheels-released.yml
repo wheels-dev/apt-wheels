@@ -199,6 +199,12 @@ jobs:
         env:
           GPG_PASSPHRASE: ${{ secrets.WHEELS_REPO_GPG_PASSPHRASE }}
           GPG_KEY_ID: ${{ env.GPG_KEY_ID }}
+          # Regenerate ONLY the dispatched channel. The sync step above pulls
+          # just pool/<channel>/ into the runner, so regenerating the *other*
+          # channel here would scan an empty local pool, emit an empty Packages,
+          # and the upload below would clobber that channel's index on R2.
+          # (Stable was vanishing on every bleeding-edge run this way — #2838.)
+          CHANNELS: ${{ steps.inputs.outputs.channel }}
         run: |
           set -euo pipefail
           chmod +x scripts/regenerate-apt-metadata.sh
@@ -222,9 +228,11 @@ jobs:
           find pool/${CHANNEL} -type f -name '*.deb' | while read -r f; do
             upload_one "$f" "application/vnd.debian.binary-package"
           done
-          # Upload regenerated dists tree. apt-ftparchive rewrites these on
-          # every run; upload all files in dists/ regardless of channel.
-          find dists -type f | while read -r f; do
+          # Upload the regenerated dists tree for THIS channel only. The regen
+          # step rewrote dists/${CHANNEL}/ (and only that channel — see #2838),
+          # so scope the upload to match. Uploading dists/ wholesale used to
+          # push the other channel's (stale/empty) index back to R2.
+          find dists/${CHANNEL} -type f | while read -r f; do
             # Pick a sensible content-type per file
             case "$f" in
               *.gz)             ct="application/gzip" ;;
