@@ -20,7 +20,17 @@ fi
 
 ARCHITECTURES="amd64 arm64"
 COMPONENTS="main"
-DISTRIBUTIONS="stable bleeding-edge"
+# Per-channel regen (CHANNELS env), default = both for manual full rebuilds.
+#
+# CRITICAL (#3218, recurrence of #2838): the publish workflow only syncs
+# pool/<dispatched-channel>/ from R2, so any channel NOT being published has an
+# empty local pool here. Regenerating it would emit an empty Packages, and the
+# upload step's `find dists` would then clobber that channel's good R2 index.
+# A bleeding-edge snapshot publish was wiping the stable index minutes after
+# every stable release. Scoping to the dispatched channel keeps the other
+# channel's R2 dists untouched. The workflow passes CHANNELS=<channel>; a bare
+# manual run still rebuilds both (only safe when both pools are present locally).
+DISTRIBUTIONS="${CHANNELS:-stable bleeding-edge}"
 
 # apt-ftparchive uses a config file to know where the pool lives. The same
 # config drives both distributions — only the dist-name and the scan path

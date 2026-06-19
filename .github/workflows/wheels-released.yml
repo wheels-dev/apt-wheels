@@ -199,6 +199,11 @@ jobs:
         env:
           GPG_PASSPHRASE: ${{ secrets.WHEELS_REPO_GPG_PASSPHRASE }}
           GPG_KEY_ID: ${{ env.GPG_KEY_ID }}
+          # Scope regen to the dispatched channel only. The sync step above pulls
+          # just pool/<channel>/ from R2, so regenerating the OTHER channel would
+          # scan an empty local pool and clobber its R2 index on upload
+          # (#3218 / #2838). The other channel's dists are left untouched.
+          CHANNELS: ${{ steps.inputs.outputs.channel }}
         run: |
           set -euo pipefail
           chmod +x scripts/regenerate-apt-metadata.sh
