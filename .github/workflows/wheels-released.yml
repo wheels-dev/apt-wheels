@@ -171,7 +171,7 @@ jobs:
           # in client_payload uses SemVer hyphen (-snapshot.N); the on-URL form
           # uses dot (.snapshot.N). Translate before fetch.
           URL_VERSION="${VERSION/-snapshot./.snapshot.}"
-          ASSET="${PKG}_${URL_VERSION}_amd64.deb"
+          ASSET="${PKG}_${URL_VERSION}_all.deb"
           TAG="v${VERSION}"
           echo "Fetching ${ASSET} from ${UPSTREAM_REPO}@${TAG}"
           gh release download "$TAG" \
@@ -189,10 +189,10 @@ jobs:
           set -euo pipefail
           # Canonical pool path uses ~-form (SemVer pre-release separator).
           POOL_DIR="pool/${CHANNEL}/${PKG:0:1}/${PKG}"
-          POOL_FILE="${POOL_DIR}/${PKG}_${VERSION}_amd64.deb"
+          POOL_FILE="${POOL_DIR}/${PKG}_${VERSION}_all.deb"
           mkdir -p "$POOL_DIR"
           URL_VERSION="${VERSION/-snapshot./.snapshot.}"
-          mv "incoming/${PKG}_${URL_VERSION}_amd64.deb" "$POOL_FILE"
+          mv "incoming/${PKG}_${URL_VERSION}_all.deb" "$POOL_FILE"
           echo "Placed: $POOL_FILE ($(du -h "$POOL_FILE" | cut -f1))"
 
       - name: Regenerate apt metadata + sign
