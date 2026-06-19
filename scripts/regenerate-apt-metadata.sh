@@ -18,7 +18,7 @@ if [ -z "${GPG_KEY_ID:-}" ]; then
   exit 1
 fi
 
-ARCHITECTURES="amd64"
+ARCHITECTURES="amd64 arm64"
 COMPONENTS="main"
 DISTRIBUTIONS="stable bleeding-edge"
 
