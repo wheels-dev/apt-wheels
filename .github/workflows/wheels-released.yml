@@ -156,7 +156,10 @@ jobs:
             [ -z "$CURSOR" ] && break
           done
           echo "Local pool/${CHANNEL}/ contents after sync:"
-          find pool/${CHANNEL}/ -type f | head -20
+          # Diagnostic only. `head` closes the pipe after 20 lines; find then
+          # gets SIGPIPE and `pipefail` would fail the step after a successful
+          # R2 pull (run 369: last pull was …/wheels-be_4.0.6-snapshot.2273_all.deb).
+          find pool/${CHANNEL}/ -type f | head -20 || true
 
       - name: Download new .deb from upstream Release
         env:
