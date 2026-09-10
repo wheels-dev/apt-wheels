@@ -130,54 +130,40 @@ jobs:
           echo "$FINGERPRINT:6:" | gpg --batch --yes --import-ownertrust
           echo "GPG_KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
 
-      - name: Sync existing pool from R2
+      - name: Pull existing Packages index from R2
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CHANNEL: ${{ steps.inputs.outputs.channel }}
         run: |
           set -euo pipefail
-          # Retry transient R2 failures (timeouts / 5xx / connection resets).
-          # The pool is unbounded and re-downloaded in full on every publish, so
-          # the sync is a long sequence of single-shot `wrangler r2 object get`
-          # calls; one transient failure used to kill the whole run. 3 attempts
-          # with backoff absorbs that, and failures are logged instead of being
-          # discarded to /dev/null so a persistent error stays diagnosable.
-          r2get() {
+          # Incremental regen: download the channel's current Packages index
+          # (~KBs) instead of the whole pool (~18 GB). regenerate-apt-metadata.sh
+          # appends the new package's stanza and rebuilds Release, so the
+          # historical .deb files never need to be pulled again.
+          pull_index() {
             local key="$1" attempt out
             for attempt in 1 2 3; do
               if out="$(wrangler r2 object get "${R2_BUCKET}/${key}" --file="$key" --remote 2>&1)"; then
+                echo "  pulled ${key} ($(wc -c < "$key") bytes)"
                 return 0
               fi
-              echo "::warning::r2 object get failed for ${key} (attempt ${attempt}/3): ${out}" >&2
+              # Missing index → first publish on this channel: start empty.
+              if echo "$out" | grep -qiE "does not exist|NoSuchKey|NoSuchObject"; then
+                : > "$key"
+                echo "  ${key} absent — starting from an empty index"
+                return 0
+              fi
+              echo "::warning::index pull failed for ${key} (attempt ${attempt}/3): ${out}" >&2
               sleep $((attempt * 5))
             done
-            echo "::error::r2 object get failed permanently for ${key}" >&2
+            echo "::error::index pull failed permanently for ${key}" >&2
             return 1
           }
-          # List all R2 objects under pool/<channel>/ and download each.
-          # apt-ftparchive needs the actual .deb files locally so it can compute
-          # size + sha256 + read package metadata for the Packages index.
-          mkdir -p pool/${CHANNEL}
-          PREFIX="pool/${CHANNEL}/"
-          CURSOR=""
-          while :; do
-            URL="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/r2/buckets/${R2_BUCKET}/objects?prefix=${PREFIX}&per_page=1000"
-            [ -n "$CURSOR" ] && URL="${URL}&cursor=${CURSOR}"
-            RESP=$(curl -sS "$URL" -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
-            echo "$RESP" | jq -r '.result[].key' | while IFS= read -r key; do
-              [ -z "$key" ] && continue
-              mkdir -p "$(dirname "$key")"
-              echo "  pulling $key"
-              r2get "$key"
-            done
-            CURSOR=$(echo "$RESP" | jq -r '.result_info.cursor // empty')
-            [ -z "$CURSOR" ] && break
+          for arch in amd64 arm64; do
+            key="dists/${CHANNEL}/main/binary-${arch}/Packages"
+            mkdir -p "$(dirname "$key")"
+            pull_index "$key"
           done
-          echo "Local pool/${CHANNEL}/ contents after sync:"
-          # Diagnostic only. `head` closes the pipe after 20 lines; find then
-          # gets SIGPIPE and `pipefail` would fail the step after a successful
-          # R2 pull (run 369: last pull was …/wheels-be_4.0.6-snapshot.2273_all.deb).
-          find pool/${CHANNEL}/ -type f | head -20 || true
 
       - name: Download new .deb from upstream Release
         env:
@@ -220,10 +206,11 @@ jobs:
         env:
           GPG_PASSPHRASE: ${{ secrets.WHEELS_REPO_GPG_PASSPHRASE }}
           GPG_KEY_ID: ${{ env.GPG_KEY_ID }}
-          # Scope regen to the dispatched channel only. The sync step above pulls
-          # just pool/<channel>/ from R2, so regenerating the OTHER channel would
-          # scan an empty local pool and clobber its R2 index on upload
-          # (#3218 / #2838). The other channel's dists are left untouched.
+          # Scope regen to the dispatched channel only. The workflow pulls only
+          # that channel's Packages index and slots only its new .deb, so
+          # regenerating the OTHER channel would append against a missing index
+          # and clobber its R2 dists on upload (#3218 / #2838). The other
+          # channel's dists are left untouched.
           CHANNELS: ${{ steps.inputs.outputs.channel }}
         run: |
           set -euo pipefail
