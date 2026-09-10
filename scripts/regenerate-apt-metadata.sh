@@ -1,15 +1,30 @@
 #!/bin/bash
-# Regenerates apt metadata for both `stable` and `bleeding-edge` distributions
-# under dists/, then signs Release with GPG (detached → Release.gpg, inline →
+# Incrementally regenerates apt metadata for one dispatched distribution under
+# dists/, then signs Release with GPG (detached → Release.gpg, inline →
 # InRelease). Both signed forms are required: older apt clients read Release +
 # Release.gpg, newer clients prefer InRelease.
+#
+# This is the incremental replacement for the old full-pool scan. The old flow
+# ran `apt-ftparchive packages pool/<dist>` over EVERY historical .deb, which
+# forced the workflow to re-download the whole pool (~18 GB, hundreds of files,
+# ~15 min and growing) on every publish. Instead:
+#
+#   * the workflow slots the single new .deb into pool/<dist>/… and downloads
+#     the channel's current Packages index into dists/<dist>/main/binary-*/,
+#   * this script appends the new package's stanza (apt-ftparchive over just
+#     that one .deb) to each architecture index, gzips, and regenerates Release
+#     via `apt-ftparchive release` — which only needs the index files, not the
+#     pool.
+#
+# A package of Architecture `all` is appended to BOTH binary-amd64 and
+# binary-arm64 (apt-ftparchive includes `all` in every arch index, verified
+# against the live repo); an arch-specific package lands only in its own index.
 #
 # Inputs (env vars):
 #   GPG_PASSPHRASE  — passphrase for the imported signing key
 #   GPG_KEY_ID      — long-form key ID (set by the workflow after `gpg --import`)
-#
-# Idempotent: safe to run by hand against an existing tree to repair a torn
-# release. Re-reads everything in pool/ and rewrites dists/ from scratch.
+#   CHANNELS        — space-separated distributions (workflow passes the single
+#                     dispatched channel; default "stable bleeding-edge")
 
 set -euo pipefail
 
@@ -20,56 +35,47 @@ fi
 
 ARCHITECTURES="amd64 arm64"
 COMPONENTS="main"
-# Per-channel regen (CHANNELS env), default = both for manual full rebuilds.
-#
-# CRITICAL (#3218, recurrence of #2838): the publish workflow only syncs
-# pool/<dispatched-channel>/ from R2, so any channel NOT being published has an
-# empty local pool here. Regenerating it would emit an empty Packages, and the
-# upload step's `find dists` would then clobber that channel's good R2 index.
-# A bleeding-edge snapshot publish was wiping the stable index minutes after
-# every stable release. Scoping to the dispatched channel keeps the other
-# channel's R2 dists untouched. The workflow passes CHANNELS=<channel>; a bare
-# manual run still rebuilds both (only safe when both pools are present locally).
 DISTRIBUTIONS="${CHANNELS:-stable bleeding-edge}"
 
-# apt-ftparchive uses a config file to know where the pool lives. The same
-# config drives both distributions — only the dist-name and the scan path
-# change between invocations.
 APT_CONF_TEMPLATE="templates/aptftparchive.conf"
-
 if [ ! -f "$APT_CONF_TEMPLATE" ]; then
   echo "::error::Missing $APT_CONF_TEMPLATE — template is expected to ship in the bucket repo."
   exit 1
 fi
 
 for DIST in $DISTRIBUTIONS; do
-  echo "── Regenerating dists/${DIST}/ ──"
+  echo "── Incrementally updating dists/${DIST}/ ──"
   DIST_DIR="dists/${DIST}"
   mkdir -p "$DIST_DIR"
-  # First publish for a brand-new channel: the pool dir may not exist yet.
-  # apt-ftparchive aborts on a missing scan path, so create an empty pool
-  # for now — it'll be backfilled by the first publish dispatch on that channel.
   mkdir -p "pool/${DIST}"
+
+  # Only the just-slotted .deb is present locally (the pool is not synced).
+  NEW_DEB=$(find "pool/${DIST}" -type f -name '*.deb' | head -1 || true)
+  if [ -z "$NEW_DEB" ]; then
+    echo "::warning::No .deb under pool/${DIST} — nothing to append; skipping."
+    continue
+  fi
+  echo "  new package: ${NEW_DEB}"
 
   for COMPONENT in $COMPONENTS; do
     for ARCH in $ARCHITECTURES; do
       BIN_DIR="${DIST_DIR}/${COMPONENT}/binary-${ARCH}"
       mkdir -p "$BIN_DIR"
 
-      # apt-ftparchive packages <override> <pool-path> emits Packages on stdout.
-      # We don't use an override file (no priority overrides for now).
-      apt-ftparchive \
-        --arch "$ARCH" \
-        packages "pool/${DIST}" \
-        > "${BIN_DIR}/Packages"
+      # Existing index was downloaded by the workflow; first publish starts empty.
+      [ -f "${BIN_DIR}/Packages" ] || : > "${BIN_DIR}/Packages"
+
+      # Emit the new package's stanza and append. `--arch` matches the old full
+      # scan: an `all` package is emitted for both arches, `amd64` only for
+      # binary-amd64 (arm64 yields an empty append, which is a no-op).
+      apt-ftparchive --arch "$ARCH" packages "$NEW_DEB" >> "${BIN_DIR}/Packages"
 
       gzip -9 --keep --force "${BIN_DIR}/Packages"
     done
   done
 
-  # apt-ftparchive release emits the Release file metadata. The config template
-  # provides Origin/Label/Codename/Description etc.; we override -o APT::FTPArchive::Release::Codename
-  # per distribution so a single conf can drive both.
+  # apt-ftparchive release emits the Release metadata from the index files in
+  # dists/<dist>/ — it does not read pool/, so it works without the pool present.
   apt-ftparchive \
     -c "$APT_CONF_TEMPLATE" \
     -o "APT::FTPArchive::Release::Codename=${DIST}" \
@@ -96,7 +102,7 @@ for DIST in $DISTRIBUTIONS; do
     --output "${DIST_DIR}/InRelease" \
     "${DIST_DIR}/Release"
 
-  echo "  ✓ Release + Release.gpg + InRelease written for ${DIST}"
+  echo "  ✓ appended ${NEW_DEB}, Release + Release.gpg + InRelease written for ${DIST}"
 done
 
 echo "Done."
