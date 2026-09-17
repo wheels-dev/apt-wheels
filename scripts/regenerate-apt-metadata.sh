@@ -43,6 +43,10 @@ if [ ! -f "$APT_CONF_TEMPLATE" ]; then
   exit 1
 fi
 
+# Scratch file for the stanza apt-ftparchive emits for the .deb being published.
+TMP_STANZA=$(mktemp)
+trap 'rm -f "$TMP_STANZA"' EXIT
+
 for DIST in $DISTRIBUTIONS; do
   echo "── Incrementally updating dists/${DIST}/ ──"
   DIST_DIR="dists/${DIST}"
@@ -57,6 +61,17 @@ for DIST in $DISTRIBUTIONS; do
   fi
   echo "  new package: ${NEW_DEB}"
 
+  # The name/version this .deb declares. Taken from the package's own control
+  # file rather than the filename so it matches what apt-ftparchive emits (and
+  # keeps matching if nfpm ever changes its filename convention).
+  NEW_PKG=$(dpkg-deb -f "$NEW_DEB" Package)
+  NEW_VER=$(dpkg-deb -f "$NEW_DEB" Version)
+  if [ -z "$NEW_PKG" ] || [ -z "$NEW_VER" ]; then
+    echo "::error::Could not read Package/Version from ${NEW_DEB}"
+    exit 1
+  fi
+  echo "  declared as: ${NEW_PKG} ${NEW_VER}"
+
   for COMPONENT in $COMPONENTS; do
     for ARCH in $ARCHITECTURES; do
       BIN_DIR="${DIST_DIR}/${COMPONENT}/binary-${ARCH}"
@@ -65,10 +80,21 @@ for DIST in $DISTRIBUTIONS; do
       # Existing index was downloaded by the workflow; first publish starts empty.
       [ -f "${BIN_DIR}/Packages" ] || : > "${BIN_DIR}/Packages"
 
-      # Emit the new package's stanza and append. `--arch` matches the old full
-      # scan: an `all` package is emitted for both arches, `amd64` only for
-      # binary-amd64 (arm64 yields an empty append, which is a no-op).
-      apt-ftparchive --arch "$ARCH" packages "$NEW_DEB" >> "${BIN_DIR}/Packages"
+      # Emit the new package's stanza. `--arch` matches the old full scan: an
+      # `all` package is emitted for both arches, `amd64` only for binary-amd64
+      # (arm64 yields an empty stanza, which is a no-op).
+      apt-ftparchive --arch "$ARCH" packages "$NEW_DEB" > "${TMP_STANZA}"
+
+      if [ -s "${TMP_STANZA}" ]; then
+        # Replace rather than append. Appending is what produced two stanzas for
+        # the same name-version when a version is re-cut with a different build;
+        # both referenced the same pool path, but the stale one described the
+        # previous artifact, so apt rejected the download with "File has
+        # unexpected size". A no-op append for the arch that emits nothing keeps
+        # the index unchanged.
+        python3 "$(dirname "$0")/replace-package-stanza.py" \
+          "${BIN_DIR}/Packages" "${TMP_STANZA}"
+      fi
 
       gzip -9 --keep --force "${BIN_DIR}/Packages"
     done
