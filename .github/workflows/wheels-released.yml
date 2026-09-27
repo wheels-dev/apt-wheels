@@ -38,6 +38,11 @@ on:
         options:
           - stable
           - bleeding-edge
+      allow_republish:
+        description: 'DANGER: overwrite a .deb whose version is already published with DIFFERENT bytes (served as immutable).'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -61,18 +66,22 @@ jobs:
       - name: Resolve inputs
         id: inputs
         env:
+          EVENT_NAME: ${{ github.event_name }}
           CLIENT_VERSION: ${{ github.event.client_payload.version }}
           CLIENT_CHANNEL: ${{ github.event.client_payload.channel }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_ALLOW_REPUBLISH: ${{ inputs.allow_republish }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+          ALLOW_REPUBLISH="false"
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
             VERSION="$CLIENT_VERSION"
             CHANNEL="$CLIENT_CHANNEL"
           else
             VERSION="$INPUT_VERSION"
             CHANNEL="$INPUT_CHANNEL"
+            [ "$INPUT_ALLOW_REPUBLISH" = "true" ] && ALLOW_REPUBLISH="true"
           fi
           if [ -z "$VERSION" ] || [ -z "$CHANNEL" ]; then
             echo "::error::Both version and channel are required."
@@ -91,6 +100,7 @@ jobs:
             echo "channel=$CHANNEL"
             echo "pkg=$PKG"
             echo "upstream_repo=$UPSTREAM_REPO"
+            echo "allow_republish=$ALLOW_REPUBLISH"
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout bucket repo
@@ -201,6 +211,50 @@ jobs:
           URL_VERSION="${VERSION/-snapshot./.snapshot.}"
           mv "incoming/${PKG}_${URL_VERSION}_all.deb" "$POOL_FILE"
           echo "Placed: $POOL_FILE ($(du -h "$POOL_FILE" | cut -f1))"
+
+      # Pool files are served as `immutable` for a year. Re-publishing a version
+      # with DIFFERENT bytes (a re-cut) replaces them under the same URL, and a
+      # cache or mirror holding the old .deb then fails apt's hash check
+      # ("File has unexpected size", the #3218 failure mode). Identical bytes are
+      # a harmless no-op. Refuse a changed re-publish unless a human overrides
+      # it explicitly (wheels-dev/wheels#3690).
+      - name: Refuse to overwrite a published .deb with different bytes
+        env:
+          VERSION: ${{ steps.inputs.outputs.version }}
+          CHANNEL: ${{ steps.inputs.outputs.channel }}
+          PKG: ${{ steps.inputs.outputs.pkg }}
+          ALLOW_REPUBLISH: ${{ steps.inputs.outputs.allow_republish }}
+        run: |
+          set -euo pipefail
+          POOL_FILE="pool/${CHANNEL}/${PKG:0:1}/${PKG}/${PKG}_${VERSION}_all.deb"
+          NEW_SHA="$(sha256sum "$POOL_FILE" | awk '{print $1}')"
+          # The published stanza for this exact pool path, if any (both arch
+          # indexes carry the same _all.deb; the first match is enough).
+          OLD_SHA="$(python3 - "$POOL_FILE" dists/"${CHANNEL}"/main/binary-*/Packages <<'PY'
+          import sys
+          target, indexes = sys.argv[1], sys.argv[2:]
+          for path in indexes:
+              try:
+                  text = open(path, encoding="utf-8", errors="replace").read()
+              except FileNotFoundError:
+                  continue
+              for stanza in text.split("\n\n"):
+                  fields = dict(line.split(": ", 1) for line in stanza.splitlines() if ": " in line and not line.startswith(" "))
+                  if fields.get("Filename") == target:
+                      print(fields.get("SHA256", ""))
+                      sys.exit(0)
+          PY
+          )"
+          if [ -z "$OLD_SHA" ]; then
+            echo "${PKG} ${VERSION} is new in ${CHANNEL}."
+          elif [ "$OLD_SHA" = "$NEW_SHA" ]; then
+            echo "::notice::${PKG} ${VERSION} is already published in ${CHANNEL} with identical bytes (sha256 ${NEW_SHA}); re-publishing is a no-op for the pool object."
+          elif [ "$ALLOW_REPUBLISH" = "true" ]; then
+            echo "::warning::allow_republish is set: OVERWRITING ${POOL_FILE} (published sha256 ${OLD_SHA}, new ${NEW_SHA}). Its bytes change under a URL served as immutable; caches and mirrors holding the old .deb will fail apt's hash check until they refetch."
+          else
+            echo "::error::${PKG} ${VERSION} is already published in ${CHANNEL} with different bytes (published sha256 ${OLD_SHA}, new ${NEW_SHA}). Pool files are immutable. To deliberately replace it (a re-cut), dispatch with allow_republish=true."
+            exit 1
+          fi
 
       - name: Regenerate apt metadata + sign
         env:
