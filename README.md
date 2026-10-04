@@ -11,7 +11,7 @@ the metadata + uploads to R2 on every release. End users do:
 ```bash
 # Stable channel
 curl -fsSL https://apt.wheels.dev/wheels.gpg \
-  | sudo tee /usr/share/keyrings/wheels.gpg >/dev/null
+  | sudo gpg --dearmor -o /usr/share/keyrings/wheels.gpg
 echo "deb [signed-by=/usr/share/keyrings/wheels.gpg] https://apt.wheels.dev stable main" \
   | sudo tee /etc/apt/sources.list.d/wheels.list
 sudo apt update && sudo apt install wheels
@@ -141,7 +141,7 @@ Before this repo will publish a usable repository:
 
    ```bash
    curl -fsSL https://apt.wheels.dev/wheels.gpg \
-     | sudo tee /usr/share/keyrings/wheels.gpg >/dev/null
+     | sudo gpg --dearmor -o /usr/share/keyrings/wheels.gpg
    echo "deb [signed-by=/usr/share/keyrings/wheels.gpg] https://apt.wheels.dev stable main" \
      | sudo tee /etc/apt/sources.list.d/wheels.list
    sudo apt update
